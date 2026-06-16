@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Envelope Budgeter</title>
+    <style>
+        :root {
+            --primary: #2e7d32;
+            --background: #f4f6f8;
+            --surface: #ffffff;
+            --text: #333333;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--background);
+            color: var(--text);
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .card {
+            background: var(--surface);
+            border-radius: 12px;
+            padding: 20px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            margin-bottom: 16px;
+            box-sizing: border-box;
+        }
+        h2 { margin-top: 0; color: var(--primary); }
+        .balance-display {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+            box-sizing: border-box;
+            margin-bottom: 12px;
+        }
+        .btn-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button.secondary { background-color: #555; }
+        button.outline { 
+            background-color: transparent; 
+            color: var(--primary); 
+            border: 2px solid var(--primary);
+            padding: 6px 12px;
+            font-size: 0.85rem;
+            margin-top: 8px;
+        }
+        button.excel {
+            background-color: #107c41;
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+        .history-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Budget Status Card -->
+    <div class="card">
+        <h2>Weekly Envelope ✉️</h2>
+        <div id="dateInfo" style="font-size: 0.85rem; color: #666;"></div>
+        <div class="balance-display" id="balanceRemaining">$100.00</div>
+        <div style="font-size: 0.9rem; color: #666;" id="budgetLabel">remaining of $100.00 weekly cap</div>
+        <button class="outline" onclick="updateBaseBudget()">Change Weekly Cap ⚙️</button>
+    </div>
+
+    <!-- Quick Entry Card -->
+    <div class="card">
+        <h3>Log Expense</h3>
+        <input type="text" id="expenseNote" placeholder="e.g., 45 groceries">
+        <div class="btn-grid">
+            <button onclick="logExpense('Need')">Need 🏠</button>
+            <button onclick="logExpense('Want')">Want 🍦</button>
+            <button onclick="logExpense('Special')">Special 🎉</button>
+            <button onclick="logExpense('Emergency')">Urgent 🚨</button>
+        </div>
+    </div>
+
+    <!-- Category Totals Card -->
+    <div class="card">
+        <h3>Category Breakdown</h3>
+        <div id="categoryTotals" style="font-size: 0.9rem; line-height: 1.6;"></div>
+    </div>
+
+    <!-- History Card -->
+    <div class="card">
+        <h3>Recent Transactions</h3>
+        <ul id="history" class="history-list"></ul>
+        <!-- NEW: Export Button -->
+        <button class="excel" onclick="exportToCSV()">Export to Google Sheets (.csv) 📊</button>
+        <button class="secondary" onclick="resetBudget()" style="width: 100%; margin-top: 15px;">Reset Entire Budget</button>
+    </div>
+
+    <script>
+        let budgetState = JSON.parse(localStorage.getItem('envelopeBudget')) || {
+            baseWeeklyLimit: 100.00,
+            weeklyBalance: 100.00,
+            lastResetDate: new Date().toISOString(),
+            totals: { Need: 0, Want: 0, Special: 0, Emergency: 0 },
+            history: []
+        };
+
+        if (!budgetState.baseWeeklyLimit) {
+            budgetState.baseWeeklyLimit = 100.00;
+        }
+
+        function checkWeekReset() {
+            const now = new Date();
+            const lastReset = new Date(budgetState.lastResetDate);
+            const oneWeekInMs = 7 * 24 * 60 * 60 * 1000;
+            
+            if (now - lastReset >= oneWeekInMs) {
+                budgetState.weeklyBalance = budgetState.baseWeeklyLimit; 
+                budgetState.lastResetDate = now.toISOString();
+                saveAndRender();
+            }
+        }
+
+        function updateBaseBudget() {
+            const newLimitRaw = prompt("Enter your new starting weekly budget amount:", budgetState.baseWeeklyLimit);
+            const newLimit = parseFloat(newLimitRaw);
+            
+            if (isNaN(newLimit) || newLimit < 0) {
+                alert("Please enter a valid number.");
+                return;
+            }
+
+            const difference = newLimit - budgetState.baseWeeklyLimit;
+            budgetState.baseWeeklyLimit = newLimit;
+            budgetState.weeklyBalance += difference;
+            
+            saveAndRender();
+        }
+
+        function logExpense(category) {
+            const inputField = document.getElementById('expenseNote');
+            const rawText = inputField.value.trim();
+            const amount = parseFloat(rawText);
+            
+            if (isNaN(amount) || amount <= 0) {
+                alert("Please start with a valid number (e.g., 15 lunch)");
+                return;
+            }
+
+            const description = rawText.replace(amount, '').trim() || "Uncategorized";
+            
+            // Capture specific date and time points
+            const currentDateTime = new Date();
+
+            budgetState.weeklyBalance -= amount;
+            budgetState.totals[category] += amount;
+            budgetState.history.unshift({
+                amount: amount,
+                description: description,
+                category: category,
+                date: currentDateTime.toLocaleDateString(),
+                time: currentDateTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) // NEW: Captures Time
+            });
+
+            inputField.value = '';
+            saveAndRender();
+        }
+
+        // NEW: Function to bundle history into spreadsheet layout
+        function exportToCSV() {
+            if (budgetState.history.length === 0) {
+                alert("No transactions to export yet!");
+                return;
+            }
+
+            // Set up headers matching your requirements
+            let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += "Date,Time,Amount ($),Category,Description\n";
+
+            // Loop through entries and escape strings to ensure spaces/commas don't break cells
+            budgetState.history.forEach(item => {
+                const escapedDesc = `"${item.description.replace(/"/g, '""')}"`;
+                const row = `${item.date},${item.time || 'N/A'},${item.amount.toFixed(2)},${item.category},${escapedDesc}`;
+                csvContent += row + "\n";
+            });
+
+            // Trigger safe browser download anchor link
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `budget_export_${new Date().toLocaleDateString()}.csv`);
+            document.body.appendChild(link);
+            
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function resetBudget() {
+            if (confirm("Are you sure you want to completely clear your budget data?")) {
+                budgetState = {
+                    baseWeeklyLimit: 100.00,
+                    weeklyBalance: 100.00,
+                    lastResetDate: new Date().toISOString(),
+                    totals: { Need: 0, Want: 0, Special: 0, Emergency: 0 },
+                    history: []
+                };
+                saveAndRender();
+            }
+        }
+
+        function saveAndRender() {
+            localStorage.setItem('envelopeBudget', JSON.stringify(budgetState));
+            
+            document.getElementById('balanceRemaining').innerText = `$${budgetState.weeklyBalance.toFixed(2)}`;
+            document.getElementById('budgetLabel').innerText = `remaining of $${budgetState.baseWeeklyLimit.toFixed(2)} weekly cap`;
+            
+            const nextReset = new Date(new Date(budgetState.lastResetDate).getTime() + 7 * 24 * 60 * 60 * 1000);
+            document.getElementById('dateInfo').innerText = `Week resets on: ${nextReset.toLocaleDateString()}`;
+
+            let categoryHtml = '';
+            for (const [cat, total] of Object.entries(budgetState.totals)) {
+                categoryHtml += `<div><strong>${cat}:</strong> $${total.toFixed(2)}</div>`;
+            }
+            document.getElementById('categoryTotals').innerHTML = categoryHtml;
+
+            const historyList = document.getElementById('history');
+            historyList.innerHTML = budgetState.history.map(item => `
+                <li class="history-item">
+                    <span>${item.date} (${item.time || ''}) - ${item.description}</span>
+                    <span style="color: #c62828;">-$${item.amount.toFixed(2)}</span>
+                </li>
+            `).join('');
+        }
+
+        checkWeekReset();
+        saveAndRender();
+    </script>
+</body>
+</html>
